@@ -1,0 +1,4 @@
+bleak==2.0.0
+pysnooz==0.10.0
+websockets==15.0.1
+

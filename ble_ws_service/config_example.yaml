@@ -1,0 +1,18 @@
+service:
+  websocket:
+    host: 0.0.0.0
+    port: 8765
+    auth_token: "ws-shared-secret"   # optional, omit or null to disable auth
+
+  # Multiple Snooz devices supported
+  devices:
+    # Linux / Raspberry Pi (stable MAC works great)
+    - device_name: bedroom
+      address: "40:F5:21:43:00:0F"
+      password: "0c00000000000000"
+
+    # macOS (Bleak typically shows a CoreBluetooth UUID instead of real MAC)
+    # Use the advertised name for matching instead:
+    - device_name: office
+      name: "Snooz-050F"
+      password: "0c00000000000000"

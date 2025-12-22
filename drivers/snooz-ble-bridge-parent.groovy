@@ -21,7 +21,7 @@ metadata {
         name: "Snooz BLE Bridge (Parent)",
         namespace: "k-mtg",
         author: "K-MTG",
-        importUrl: "https://raw.githubusercontent.com/K-MTG/hubitat-snooz-ble/main/drivers/snooz-ble-bridge-parent.groovy"
+        importUrl: "https://raw.githubusercontent.com/K-MTG/Hubitat-Snooz-BLE/refs/heads/main/drivers/snooz-ble-bridge-parent.groovy"
     ) {
         capability "Initialize"
         capability "Refresh"

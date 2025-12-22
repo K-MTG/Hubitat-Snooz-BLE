@@ -122,8 +122,8 @@ cd Hubitat-Snooz-BLE/snooz_ble_ws_service
 ### Setup Hubitat Driver
 1. In Hubitat, go to **Drivers Code**
 2. Add both drivers (Import URL):
-   - Parent: `https://raw.githubusercontent.com/K-MTG/hubitat-snooz-ble/main/drivers/snooz-ble-bridge-parent.groovy`
-   - Child: `https://raw.githubusercontent.com/K-MTG/hubitat-snooz-ble/main/drivers/snooz-ble-device-child.groovy`
+   - Parent: `https://raw.githubusercontent.com/K-MTG/Hubitat-Snooz-BLE/refs/heads/main/drivers/snooz-ble-bridge-parent.groovy`
+   - Child: `https://raw.githubusercontent.com/K-MTG/Hubitat-Snooz-BLE/refs/heads/main/drivers/snooz-ble-device-child.groovy`
 3. Create a virtual device using **Snooz BLE Bridge (Parent)**
 4. Configure the WebSocket host, port, and token (optional) under Preferences
 5. Click **Initialize**

@@ -15,7 +15,7 @@ metadata {
         name: "Snooz BLE Device (Child)",
         namespace: "k-mtg",
         author: "K-MTG",
-        importUrl: "https://raw.githubusercontent.com/K-MTG/hubitat-snooz-ble/main/drivers/snooz-ble-device-child.groovy"
+        importUrl: "https://raw.githubusercontent.com/K-MTG/Hubitat-Snooz-BLE/refs/heads/main/drivers/snooz-ble-device-child.groovy"
     ) {
         capability "Switch"
         capability "FanControl"

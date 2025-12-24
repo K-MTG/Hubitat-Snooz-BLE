@@ -113,7 +113,7 @@ sudo systemctl start bluetooth
 ```bash
 cd /opt
 git clone https://github.com/K-MTG/Hubitat-Snooz-BLE.git
-cd Hubitat-Snooz-BLE/snooz_ble_ws_service
+cd Hubitat-Snooz-BLE/ble_ws_service
 ```
 4. Create `config.yaml` using `config_example.yaml` as reference. 
 5. Start container `sudo docker compose up -d --build`

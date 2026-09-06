@@ -1,5 +1,5 @@
 bleak==3.0.2
 pysnooz==0.10.0
-websockets==16.0
+websockets==17.1
 PyYAML==6.0.3
 

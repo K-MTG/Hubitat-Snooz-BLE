@@ -143,6 +143,17 @@ class BleSnooz:
         self._unsubscribe = self._device.subscribe_to_state_change(self._on_state_change)
         return True
 
+    def update_ble_device(self, ble_device: BLEDevice, adv: AdvertisementData) -> None:
+        """
+        Swap in a freshly scanned BLEDevice without rebuilding the SnoozDevice
+        (keeps its state store and our state subscription).
+        """
+        if not self._device or not self._discovered:
+            return
+        self._device._device = ble_device
+        self._discovered.ble_device = ble_device
+        self._discovered.advertisement_data = adv
+
     async def start(self) -> None:
         """
         Ensure the device is connected enough to fetch info (also tends to “warm up” state).

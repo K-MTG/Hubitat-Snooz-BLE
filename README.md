@@ -147,6 +147,7 @@ The service:
   * `set_volume` (0–100)
   * `get_state`
 * 🔐 Supports multiple devices
+* 🩺 Rescans for a device when it becomes unavailable (e.g. after `bluetoothd` restarts) and retries the command once
 * 🐳 Docker + docker-compose ready
 
 ### Hubitat Driver (Parent + Child)

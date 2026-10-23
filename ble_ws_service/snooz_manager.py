@@ -216,9 +216,34 @@ class SnoozManager:
         async with self._ble_op_sem:
             _LOGGER.debug("[%s] BLE op start: %s", device_name, op_name)
             try:
-                return await coro_factory()
+                result = await coro_factory()
+                if result.status == SnoozCommandResultStatus.DEVICE_UNAVAILABLE and await self._rediscover(device_name):
+                    _LOGGER.info("[%s] Retrying %s after rediscovery", device_name, op_name)
+                    result = await coro_factory()
+                return result
             finally:
                 _LOGGER.debug("[%s] BLE op end: %s", device_name, op_name)
+
+    async def _rediscover(self, device_name: str) -> bool:
+        """
+        A bluetoothd restart (e.g. an unattended bluez upgrade) makes BlueZ forget every
+        device, and connecting then fails with "not found" until something scans again.
+        Devices stay bound here, so the rescan loop never scans for them; do it now.
+        """
+        _LOGGER.warning("[%s] Device unavailable; scanning to rediscover it", device_name)
+        try:
+            found = await self._scan_for_targets({device_name}, timeout=8.0)
+        except Exception:
+            _LOGGER.exception("[%s] Rediscovery scan failed", device_name)
+            return False
+
+        if device_name not in found:
+            _LOGGER.warning("[%s] Not seen during rediscovery scan", device_name)
+            return False
+
+        ble_dev, adv = found[device_name]
+        self._devices[device_name].update_ble_device(ble_dev, adv)
+        return True
 
     # ----------------------------
     # commands (volume/noise/light)

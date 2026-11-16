@@ -101,6 +101,8 @@ uv pip compile requirements.txt --python-version 3.13 --python-platform x86_64-u
 
 # deploy — on the BLE host, owner-approved
 cd <checkout>/ble_ws_service && sudo docker compose up -d --build
+# one-time, when upgrading a host from < 0.1.4 (compose project renamed):
+#   sudo docker compose build && sudo docker rm -f snooz-ble-ws-service && sudo docker compose up -d
 ```
 
 - Offline checks: use fake `BLEDevice` / `AdvertisementData` for advert parsing and binding, and a stub manager for `WebSocketServer` (connect with `websockets.asyncio.client` and test missing, wrong and correct tokens).
@@ -111,7 +113,7 @@ cd <checkout>/ble_ws_service && sudo docker compose up -d --build
 
 ## Gotchas
 
-- **The compose project name collides with the August service.** Both checkouts' compose directory is `ble_ws_service`, so both default to compose project `ble_ws_service`. On a host running both, `docker compose down` or `--remove-orphans` in one checkout can remove the other's container. The fix is a unique top-level `name:` in `docker-compose.yaml`, but applying it recreates the container, so it's an owner-approved step. Found 2026-11-15 in a fleet review; not fixed yet.
+- **Keep the explicit compose project `name: snooz-ble-ws-service`.** Without it, the project defaults to the directory name `ble_ws_service`, which the August service also uses. On a host running both, `docker compose down` or `--remove-orphans` in one checkout could then remove the other's container (found 2026-11-15 in a fleet review). The `name:` was added in 0.1.4. Upgrading a host from an older checkout needs a one-time `docker rm -f snooz-ble-ws-service`, because the old project still owns that `container_name`. Remove it by name only; never run `docker compose -p ble_ws_service down` on a shared host.
 - **On hosts shared with the August service, this one listens on 8766.** August keeps 8765 and both use host networking. Set `service.websocket.port` in `config.yaml` and the Hubitat parent's port to match. The two containers also share one Bluetooth adapter and can't coordinate scans or connects, so intermittent connect failures there may be contention.
 - **Don't build the image on a low-memory host.** A 1 GB Pi with no swap hangs when it runs out of memory (ping works, SSH doesn't) until it's power-cycled. That happened during unattended-upgrades on 2026-11-06. Build elsewhere and `docker load`, or check free memory first.
 - **`bluetoothd` goes away and comes back; the service must survive it.**
@@ -129,4 +131,3 @@ cd <checkout>/ble_ws_service && sudo docker compose up -d --build
 3. Hubitat: on an error response for a device command, re-request `get_state` so the child's optimistic state is corrected. The parent's `pending` metadata needs `deviceName` for that.
 4. Expose the Snooz Pro night light (the service already supports the light commands) in the child driver.
 5. Pin transitive deps with a Linux lock/constraints file for reproducible Docker builds.
-6. Unique compose project `name:` (see Gotchas; needs an owner-approved container recreate on each host).

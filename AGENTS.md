@@ -128,11 +128,8 @@ cd <checkout>/ble_ws_service && sudo docker compose up -d --build
   - Recovery today: the `DEVICE_UNAVAILABLE` rediscovery above, plus bleak's D-Bus reset.
   - There is **no scanner watchdog** (the August service has one). While nothing sends commands, a device can sit disconnected and its Hubitat state goes stale.
 - **At boot the container can start before `bluetoothd` is ready.** Docker live-restore is off, so Docker upgrades restart the container too. By code reading (not observed), an exception from the initial scan propagates out of `SnoozManager.start()`, the process exits, and `restart: unless-stopped` retries. Don't swallow that error without adding a retry.
+- **A WS test client is not proof that events are missing; check Hubitat.** On 2026-11-15 a test client reported no `device_state` events after commands. Hubitat's Events tab showed every change arriving from the bridge parent, so the test listener was wrong. Since 0.1.5 each broadcast is also logged at INFO (`device_state -> N client(s)`).
 - **Hosts run different BlueZ versions** (5.72–5.85, on Debian 13 and Ubuntu 24.04/26.04, Pi 4 and x86 VM). Don't assume one BlueZ behavior.
-
-## Open issues
-
-- **`device_state` events after commands weren't observed on real hardware (2026-11-15, 0.1.4).** Commands succeeded and `get_state` showed each change, but a test WS client saw no event within 10 s. It couldn't be reproduced: on pysnooz's `MockSnoozClient` with the same versions, every command emits an event. pysnooz updates the state `get_state` returns only through the code that fires `on_state_change`. 0.1.5 logs every broadcast at INFO to settle it. Also check the Hubitat child's Events tab after a command sent from another client.
 
 ## Deferred ideas (discussed, intentionally not done yet)
 

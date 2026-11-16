@@ -226,8 +226,8 @@ class WebSocketServer:
         """
         snap = event["state"]
         st = snap.get("state") or {}
-        # INFO on purpose: state changes are rare, and on 2026-11-15 events after commands
-        # weren't seen on real hardware but couldn't be reproduced; this shows whether they're sent
+        # INFO on purpose: state changes are rare, and this line is the quickest way to tell
+        # "service didn't send it" from "client didn't get it"
         _LOGGER.info(
             "[%s] device_state -> %d client(s): connected=%s on=%s volume=%s",
             event["device_name"], len(self._clients), snap.get("connected"), st.get("on"), st.get("volume"),

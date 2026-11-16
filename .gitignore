@@ -58,3 +58,5 @@ coverage.xml
 
 # Secret
 **/config.yaml
+.pi_hosts
+.pi_password

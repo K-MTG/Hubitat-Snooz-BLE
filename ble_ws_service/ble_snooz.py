@@ -8,10 +8,10 @@ from typing import Any, Callable, Optional
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
-from pysnooz.const import FIRMWARE_PAIRING_FLAGS, FIRMWARE_VERSION_BY_FLAGS, SNOOZ_ADVERTISEMENT_LENGTH
-from pysnooz.model import SnoozAdvertisementData, SnoozDeviceModel, SnoozFirmwareVersion, SnoozDeviceState
+from pysnooz.advertisement import get_device_display_name, get_device_model, parse_firmware_flags
+from pysnooz.const import MODEL_NAME_SNOOZ, SNOOZ_ADVERTISEMENT_LENGTH
+from pysnooz.model import SnoozAdvertisementData, SnoozDeviceModel, SnoozDeviceState
 from pysnooz.device import SnoozDevice
-from pysnooz import get_device_display_name  # exported by pysnooz/__init__.py
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,17 +25,6 @@ class DiscoveredSnooz:
     display_name: str
 
 
-def _parse_firmware_flags(flags: int) -> tuple[Optional[SnoozFirmwareVersion], bool]:
-    """
-    Mirrors pysnooz.advertisement.parse_firmware_flags but without home_assistant_bluetooth dependency.
-    """
-    is_pairing = (FIRMWARE_PAIRING_FLAGS & flags) == FIRMWARE_PAIRING_FLAGS
-    flags_without_pairing = flags & ~FIRMWARE_PAIRING_FLAGS
-
-    fw = FIRMWARE_VERSION_BY_FLAGS.get(flags_without_pairing)
-    return fw, is_pairing
-
-
 def parse_snooz_advertisement_from_bleak(
     name: str,
     adv: AdvertisementData,
@@ -44,6 +33,10 @@ def parse_snooz_advertisement_from_bleak(
     """
     Build SnoozAdvertisementData using Bleak AdvertisementData.
     We *always* inject the configured password (even if device is not in pairing mode).
+
+    pysnooz.parse_snooz_advertisement needs a home-assistant BluetoothServiceInfo and only
+    returns the password while pairing, so we pick the payload ourselves but reuse pysnooz's
+    firmware and model parsing to stay in sync with its supported devices.
     """
     mfg = adv.manufacturer_data or {}
     payload: Optional[bytes] = None
@@ -57,39 +50,20 @@ def parse_snooz_advertisement_from_bleak(
     if not payload or len(payload) != SNOOZ_ADVERTISEMENT_LENGTH:
         return None
 
-    fw, _is_pairing = _parse_firmware_flags(payload[0])
-    if fw is None:
+    flags = parse_firmware_flags(payload[0])
+    if flags is None:
         return None
 
-    # Model inference: pysnooz uses name + firmware. Keep it simple:
-    # - Breez advertising name usually starts with "Breez"
-    # - otherwise treat as Snooz/Pro-family
-    lower = (name or "").lower()
-    if lower.startswith("breez"):
-        model = SnoozDeviceModel.BREEZ
-    elif lower.startswith("snooz"):
-        # newer Snooz (v6+) usually reported as PRO in pysnooz; older = ORIGINAL
-        if fw in (
-            SnoOZ_FIRMWARE_VERSIONS := (
-                SnoozFirmwareVersion.V2,
-                SnoozFirmwareVersion.V3,
-                SnoozFirmwareVersion.V4,
-                SnoozFirmwareVersion.V5,
-            )
-        ):
-            model = SnoozDeviceModel.ORIGINAL
-        else:
-            model = SnoozDeviceModel.PRO
-    else:
-        # unknown name; best-effort
-        model = SnoozDeviceModel.PRO if fw == SnoozFirmwareVersion.V6 else SnoozDeviceModel.UNSUPPORTED
-
+    # pysnooz recognizes names starting with "Snooz", "Szpro" or "Breez"
+    model = get_device_model(name or "", flags.firmware_version)
     if model == SnoozDeviceModel.UNSUPPORTED:
-        return None
+        # The device matched a configured address/name and has a valid Snooz payload,
+        # so trust the config and tell original/Pro apart by firmware, as for "Snooz".
+        model = get_device_model(MODEL_NAME_SNOOZ, flags.firmware_version)
 
     return SnoozAdvertisementData(
         model=model,
-        firmware_version=fw,
+        firmware_version=flags.firmware_version,
         password=password_hex,
     )
 
@@ -123,6 +97,14 @@ class BleSnooz:
         name = adv.local_name or ble_device.name or "Snooz"
         snooz_adv = parse_snooz_advertisement_from_bleak(name=name, adv=adv, password_hex=self.password_hex)
         if snooz_adv is None:
+            # log ids/lengths only: a pairing-mode payload contains the password
+            mfg = adv.manufacturer_data or {}
+            _LOGGER.warning(
+                "[%s] Found %s (%s) but its advertisement isn't a recognized Snooz payload "
+                "(manufacturer data: %s)",
+                self.device_name, name, ble_device.address,
+                ", ".join(f"0x{k:04X}={len(v)} bytes" for k, v in mfg.items()) or "none",
+            )
             return False
 
         display_name = get_device_display_name(name, ble_device.address)

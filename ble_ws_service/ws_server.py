@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import time
@@ -9,7 +10,7 @@ from typing import Dict, Optional, Set
 
 from websockets.asyncio.server import serve, Server, ServerConnection
 from websockets.exceptions import ConnectionClosed
-from websockets.server import Request
+from websockets.http11 import Request, Response
 
 from snooz_manager import SnoozManager
 
@@ -74,21 +75,21 @@ class WebSocketServer:
 
         self._manager.register_event_listener(self._handle_manager_event)
 
-    async def _process_request(self, _connection: ServerConnection, request: Request):
+    async def _process_request(self, connection: ServerConnection, request: Request) -> Optional[Response]:
+        # The asyncio server needs a Response object here; the (status, headers, body)
+        # tuple was a legacy-API shape and made the handshake drop with no HTTP reply.
         if not self._auth_token:
             return None
 
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
-            return (
-                HTTPStatus.UNAUTHORIZED,
-                [("WWW-Authenticate", "Bearer")],
-                b"Missing Authorization header\n",
-            )
+            response = connection.respond(HTTPStatus.UNAUTHORIZED, "Missing Authorization header\n")
+            response.headers["WWW-Authenticate"] = "Bearer"
+            return response
 
         token = auth_header.removeprefix("Bearer ").strip()
-        if token != self._auth_token:
-            return (HTTPStatus.FORBIDDEN, [], b"Invalid auth token\n")
+        if not hmac.compare_digest(token.encode(), str(self._auth_token).encode()):
+            return connection.respond(HTTPStatus.FORBIDDEN, "Invalid auth token\n")
 
         return None
 

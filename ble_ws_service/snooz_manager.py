@@ -10,6 +10,8 @@ from enum import Enum
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+# get_connected_devices isn't in bleak_retry_connector.__all__; re-check it on upgrades
+from bleak_retry_connector import close_stale_connections, get_connected_devices, get_device
 
 from pysnooz.commands import SnoozCommandResult, SnoozCommandResultStatus
 from pysnooz import (
@@ -99,6 +101,7 @@ class SnoozManager:
 
     async def _initial_discovery_and_connect(self) -> None:
         target_names = set(self._devices.keys())
+        await self._close_stale_connections(target_names)
         found = await self._scan_for_targets(target_names, timeout=12.0)
 
         for devname, (ble_dev, adv) in found.items():
@@ -123,6 +126,7 @@ class SnoozManager:
                     continue
 
                 _LOGGER.info("Rescanning for missing devices: %s", sorted(missing_names))
+                await self._close_stale_connections(missing_names)
                 found = await self._scan_for_targets(missing_names, timeout=8.0)
 
                 for devname, (ble_dev, adv) in found.items():
@@ -137,6 +141,30 @@ class SnoozManager:
                 return
             except Exception:
                 _LOGGER.exception("Rescan loop error")
+
+    async def _close_stale_connections(self, device_names: Set[str]) -> None:
+        """
+        A connected Snooz stops advertising. If bluetoothd still holds a link that a dead
+        process never closed (e.g. the container was SIGKILLed by `docker rm -f`), our
+        scans never see the device again, so drop such links before scanning. Linux only:
+        get_device() returns None elsewhere (and macOS addresses are CoreBluetooth UUIDs).
+        """
+        for device_name in sorted(device_names):
+            dev = self._devices[device_name]
+            # no address yet (name-matched, never discovered), or the link is ours
+            if not dev.address or dev.is_connected():
+                continue
+            try:
+                ble_dev = await get_device(dev.address)
+                if ble_dev is None or not await get_connected_devices(ble_dev):
+                    continue
+                _LOGGER.warning(
+                    "[%s] BlueZ still holds a connection to %s that we don't own; disconnecting it",
+                    device_name, dev.address,
+                )
+                await close_stale_connections(ble_dev)
+            except Exception:
+                _LOGGER.warning("[%s] Could not check for a stale BlueZ connection", device_name, exc_info=True)
 
     async def _scan_for_targets(
             self,
@@ -206,7 +234,10 @@ class SnoozManager:
         if not self._event_listeners:
             return
         coros = [listener(event) for listener in list(self._event_listeners)]
-        await asyncio.gather(*coros, return_exceptions=True)
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                _LOGGER.warning("[%s] Event listener failed", event.get("device_name"), exc_info=result)
 
     # ----------------------------
     # BLE op serialization helper
@@ -232,6 +263,7 @@ class SnoozManager:
         """
         _LOGGER.warning("[%s] Device unavailable; scanning to rediscover it", device_name)
         try:
+            await self._close_stale_connections({device_name})
             found = await self._scan_for_targets({device_name}, timeout=8.0)
         except Exception:
             _LOGGER.exception("[%s] Rediscovery scan failed", device_name)

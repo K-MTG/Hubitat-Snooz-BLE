@@ -46,6 +46,7 @@ This project lets Hubitat control Snooz devices on your LAN without relying on a
 - BLE reliability depends heavily on distance, interference, and your host’s Bluetooth hardware.
 - Some Snooz models / firmware may not report state until the first command is sent (depending on BLE behavior).
 - This is LAN-local. Do not expose the WebSocket port to the public internet.
+- Stop the container gracefully (`docker stop` / `docker compose stop`), not with `docker rm -f` or `docker kill`. A killed container leaves the Snooz connected in BlueZ, and a connected Snooz stops advertising. Since 0.1.5 the service clears such stale connections at startup, but a graceful stop avoids the delay.
 - **macOS support**: BLE addresses may appear as a UUID (not a MAC). On Mac, configure devices by name match (e.g. `Snooz-040F`) instead of address.
 
 ---
@@ -122,7 +123,8 @@ cd Hubitat-Snooz-BLE/ble_ws_service
 ```bash
 git pull
 sudo docker compose build
-sudo docker rm -f snooz-ble-ws-service
+sudo docker stop -t 30 snooz-ble-ws-service
+sudo docker rm snooz-ble-ws-service
 sudo docker compose up -d
 ```
 ---

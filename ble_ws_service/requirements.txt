@@ -1,4 +1,5 @@
 bleak==3.1.0
+bleak-retry-connector==4.7.1
 pysnooz==0.11.0
 websockets==17.4
 PyYAML==6.0.3

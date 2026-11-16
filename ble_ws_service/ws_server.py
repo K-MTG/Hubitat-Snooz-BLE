@@ -224,6 +224,14 @@ class WebSocketServer:
         Manager event shape: {"type":"device_state","device_name":"...","state":{...}}
         Broadcast to all clients, same pattern as your August code. :contentReference[oaicite:5]{index=5}
         """
+        snap = event["state"]
+        st = snap.get("state") or {}
+        # INFO on purpose: state changes are rare, and on 2026-11-15 events after commands
+        # weren't seen on real hardware but couldn't be reproduced; this shows whether they're sent
+        _LOGGER.info(
+            "[%s] device_state -> %d client(s): connected=%s on=%s volume=%s",
+            event["device_name"], len(self._clients), snap.get("connected"), st.get("on"), st.get("volume"),
+        )
         if not self._clients:
             return
 
@@ -231,7 +239,7 @@ class WebSocketServer:
             "type": "event",
             "event": "device_state",
             "device_name": event["device_name"],
-            "state": event["state"],
+            "state": snap,
         }
         msg = json.dumps(payload)
         coros = [self._safe_send(ws, msg) for ws in list(self._clients)]

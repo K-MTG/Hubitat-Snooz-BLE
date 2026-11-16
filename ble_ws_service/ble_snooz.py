@@ -93,6 +93,9 @@ class BleSnooz:
     def is_ready(self) -> bool:
         return self._device is not None and self._discovered is not None
 
+    def is_connected(self) -> bool:
+        return self._device is not None and self._device.is_connected
+
     def bind_discovery(self, ble_device: BLEDevice, adv: AdvertisementData) -> bool:
         name = adv.local_name or ble_device.name or "Snooz"
         snooz_adv = parse_snooz_advertisement_from_bleak(name=name, adv=adv, password_hex=self.password_hex)
@@ -146,7 +149,14 @@ class BleSnooz:
         try:
             info = await self._device.async_get_info()
             if info:
-                _LOGGER.info("[%s] Connected: model=%s firmware=%s", self.device_name, info.model, info.firmware)
+                # the device's own GATT strings; snapshot() reports pysnooz's advert-based model/firmware
+                snooz_adv = self._discovered.snooz_adv if self._discovered else None
+                _LOGGER.info(
+                    "[%s] Connected: GATT model number=%s, firmware revision=%s (advertised as %s, firmware %s)",
+                    self.device_name, info.model, info.firmware,
+                    snooz_adv.model.name if snooz_adv else None,
+                    snooz_adv.firmware_version.name if snooz_adv else None,
+                )
             else:
                 _LOGGER.info("[%s] Connected (info unavailable)", self.device_name)
 
@@ -239,7 +249,7 @@ class BleSnooz:
                         if asyncio.iscoroutine(maybe_coro):
                             await maybe_coro
                     except Exception:
-                        _LOGGER.debug("[%s] state callback error", self.device_name, exc_info=True)
+                        _LOGGER.warning("[%s] State callback error", self.device_name, exc_info=True)
 
         if self._event_task and not self._event_task.done():
             self._event_task.cancel()

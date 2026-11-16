@@ -26,7 +26,7 @@ Two halves ship together and share a JSON protocol:
 ## Ground rules
 
 - **The repo is public.** Never commit or echo IPs, host names, WS tokens or pairing passwords. They live in gitignored files: `**/config.yaml` (token, pairing passwords), `.pi_hosts`, `.pi_password`. Leave the last two unopened unless the owner asks.
-- **Reading a deployed host is fine; writing needs the owner's go-ahead for that specific change.** Don't restart Docker or recreate containers as a side effect. Host OS config is managed in the owner's separate fleet (Ansible) repo; this service is not in Ansible and is deployed by hand with docker compose in each checkout.
+- **Reading a deployed host is fine; writing needs the owner's go-ahead for that specific change.** Don't restart Docker or recreate containers as a side effect. Host OS config is managed in the owner's separate fleet (Ansible) repo. Deployment of this service is moving there too: a generic `ble_ws_service` role shared with August, with `config.yaml` templated from Ansible Vault. Until that role lands, deploys are by hand with docker compose in each checkout. After it lands, don't hand-edit `config.yaml` on hosts.
 - **Say plainly when a change hasn't been tested on hardware.** Real BLE behavior can only be verified on a host with a Snooz in range.
 - **Hold new features until the owner asks.** Candidates are listed under Deferred ideas.
 
@@ -40,11 +40,14 @@ Two halves ship together and share a JSON protocol:
 - `snooz_manager.py` (`SnoozManager`):
   - Matches devices by address (Linux MAC) or advertised name (needed on macOS, where Bleak reports CoreBluetooth UUIDs).
   - Initial 12 s scan, then a 30 s rescan loop for devices that aren't bound yet.
+  - Before each of those scans (and before rediscovery), `_close_stale_connections` disconnects any configured address that BlueZ still shows as connected while we don't own the link (0.1.5). A connected Snooz doesn't advertise, so a leftover link would otherwise hide it forever.
   - A global `asyncio.Semaphore(1)` serializes every BLE command across all devices. A transitioned command (`noise_off` with `duration_s`) holds it **for the whole fade**.
   - On `DEVICE_UNAVAILABLE` it scans 8 s for that device, swaps in the fresh `BLEDevice` and retries once (0.1.3; handles BlueZ forgetting devices after a `bluetoothd` restart).
   - `BleSnooz.start()` / `refresh_state()` run outside the semaphore (startup and rescan loop).
 - `ws_server.py` (`WebSocketServer`): `websockets.asyncio.server`. Optional bearer-token auth in `_process_request`, which **must return a `Response` from `connection.respond(...)` or `None`**; a tuple breaks the handshake. Messages on one connection are handled **sequentially**, so a slow BLE op delays later commands and the heartbeat reply on that socket.
 - `version.py`: service version, logged at startup. Bump it in release commits.
+- Logging: each `device_state` broadcast is logged at INFO with its client count. Event-callback and listener errors are logged at WARNING; they used to be swallowed at DEBUG.
+- The startup line "Connected: GATT model number=…, firmware revision=…" shows the device's own GATT strings. `snapshot()`'s `model` / `firmware_version` come from pysnooz's advertisement parsing. They differ by design (e.g. GATT "V4"/"4.0" vs advert ORIGINAL/V4).
 
 ## WebSocket protocol (contract with the Groovy drivers)
 
@@ -74,7 +77,7 @@ Driver behaviour to keep in mind:
 
 ## Dependencies: pysnooz notes (0.11)
 
-- `ble_ws_service/requirements.txt` is pinned exactly (bleak 3.1.0, pysnooz 0.11.0, websockets 17.4, PyYAML 6.0.3). `tools/requirements.txt` is unpinned. About 25 transitive deps on Linux (habluetooth, bleak-retry-connector, dbus-fast, cryptography, …) are **not** pinned. pysnooz caps `transitions<0.9` and `Events<0.5`.
+- `ble_ws_service/requirements.txt` is pinned exactly: bleak 3.1.0, bleak-retry-connector 4.7.1 (imported directly since 0.1.5), pysnooz 0.11.0, websockets 17.4, PyYAML 6.0.3. `tools/requirements.txt` is unpinned. The other ~20 transitive deps on Linux (habluetooth, dbus-fast, cryptography, …) are **not** pinned. pysnooz caps `transitions<0.9` and `Events<0.5`.
 - **We use pysnooz private internals.** On every bump, confirm these still exist:
   - `SnoozDevice._device`: swapped by `update_ble_device`; pysnooz reconnects via `ble_device_callback=lambda: self._device`.
   - `SnoozDevice._api.async_read_state(use_cached=False)` and `SnoozDevice._store.patch()`: used by `refresh_state`.
@@ -84,6 +87,7 @@ Driver behaviour to keep in mind:
   - `toggle()` exists and reverses a running fade.
   - Our global semaphore means commands never overlap today.
 - `async_execute_command` for a transitioned command (duration) returns only after the fade finishes.
+- bleak-retry-connector: we import `get_device`, `close_stale_connections` and `get_connected_devices`. The last one isn't in its `__all__`, so confirm it still exists on bumps.
 - bleak 3.1.0 detects a dead D-Bus connection and resets its state instead of reporting a stale "Connected" (relevant because the container mounts the host's `/var/run/dbus`).
 - pysnooz went three years without a release (0.10.0 in 2023 → 0.10.1/0.11.0 in Nov 2026). Diff the sdists of `device.py`, `commands.py`, `advertisement.py`, `api.py` and `store.py` rather than trusting release notes.
 
@@ -101,8 +105,9 @@ uv pip compile requirements.txt --python-version 3.13 --python-platform x86_64-u
 
 # deploy — on the BLE host, owner-approved
 cd <checkout>/ble_ws_service && sudo docker compose up -d --build
-# one-time, when upgrading a host from < 0.1.4 (compose project renamed):
-#   sudo docker compose build && sudo docker rm -f snooz-ble-ws-service && sudo docker compose up -d
+# one-time, when upgrading a host from < 0.1.4 (compose project renamed). Stop gracefully, never rm -f:
+#   sudo docker compose build && sudo docker stop -t 30 snooz-ble-ws-service \
+#     && sudo docker rm snooz-ble-ws-service && sudo docker compose up -d
 ```
 
 - Offline checks: use fake `BLEDevice` / `AdvertisementData` for advert parsing and binding, and a stub manager for `WebSocketServer` (connect with `websockets.asyncio.client` and test missing, wrong and correct tokens).
@@ -113,7 +118,8 @@ cd <checkout>/ble_ws_service && sudo docker compose up -d --build
 
 ## Gotchas
 
-- **Keep the explicit compose project `name: snooz-ble-ws-service`.** Without it, the project defaults to the directory name `ble_ws_service`, which the August service also uses. On a host running both, `docker compose down` or `--remove-orphans` in one checkout could then remove the other's container (found 2026-11-15 in a fleet review). The `name:` was added in 0.1.4. Upgrading a host from an older checkout needs a one-time `docker rm -f snooz-ble-ws-service`, because the old project still owns that `container_name`. Remove it by name only; never run `docker compose -p ble_ws_service down` on a shared host.
+- **Keep the explicit compose project `name: snooz-ble-ws-service`.** Both BLE repos used to default to the directory name `ble_ws_service`. On a host running both, `docker compose down` or `--remove-orphans` in one checkout could remove the other's container (found 2026-11-15 in a fleet review). Both now set explicit names (August: `hubitat-august-ble`), added in Snooz 0.1.4, and every host was migrated on 2026-11-15.
+- **Never SIGKILL the container (`docker rm -f`, `docker kill`); stop it gracefully.** On SIGTERM the service disconnects every Snooz. A kill skips that, so bluetoothd keeps the GATT link, the Snooz stops advertising, and the service can't find it again. That cost the 2026-11-15 canary about 4 minutes, until the link was dropped with Device1.Disconnect over D-Bus. Since 0.1.5 the service clears such links itself before scanning, and compose sets `stop_grace_period: 30s` so several devices can disconnect before Docker gives up.
 - **On hosts shared with the August service, this one listens on 8766.** August keeps 8765 and both use host networking. Set `service.websocket.port` in `config.yaml` and the Hubitat parent's port to match. The two containers also share one Bluetooth adapter and can't coordinate scans or connects, so intermittent connect failures there may be contention.
 - **Don't build the image on a low-memory host.** A 1 GB Pi with no swap hangs when it runs out of memory (ping works, SSH doesn't) until it's power-cycled. That happened during unattended-upgrades on 2026-11-06. Build elsewhere and `docker load`, or check free memory first.
 - **`bluetoothd` goes away and comes back; the service must survive it.**
@@ -123,6 +129,10 @@ cd <checkout>/ble_ws_service && sudo docker compose up -d --build
   - There is **no scanner watchdog** (the August service has one). While nothing sends commands, a device can sit disconnected and its Hubitat state goes stale.
 - **At boot the container can start before `bluetoothd` is ready.** Docker live-restore is off, so Docker upgrades restart the container too. By code reading (not observed), an exception from the initial scan propagates out of `SnoozManager.start()`, the process exits, and `restart: unless-stopped` retries. Don't swallow that error without adding a retry.
 - **Hosts run different BlueZ versions** (5.72–5.85, on Debian 13 and Ubuntu 24.04/26.04, Pi 4 and x86 VM). Don't assume one BlueZ behavior.
+
+## Open issues
+
+- **`device_state` events after commands weren't observed on real hardware (2026-11-15, 0.1.4).** Commands succeeded and `get_state` showed each change, but a test WS client saw no event within 10 s. It couldn't be reproduced: on pysnooz's `MockSnoozClient` with the same versions, every command emits an event. pysnooz updates the state `get_state` returns only through the code that fires `on_state_change`. 0.1.5 logs every broadcast at INFO to settle it. Also check the Hubitat child's Events tab after a command sent from another client.
 
 ## Deferred ideas (discussed, intentionally not done yet)
 

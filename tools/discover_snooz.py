@@ -9,7 +9,14 @@ from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
-from pysnooz.const import FIRMWARE_PAIRING_FLAGS, FIRMWARE_VERSION_BY_FLAGS, SNOOZ_ADVERTISEMENT_LENGTH
+from pysnooz.const import (
+    FIRMWARE_PAIRING_FLAGS,
+    FIRMWARE_VERSION_BY_FLAGS,
+    SNOOZ_ADVERTISEMENT_LENGTH,
+    SUPPORTED_MODEL_NAMES,  # "Snooz", "Szpro" (pysnooz >= 0.10.1), "Breez"
+)
+
+KNOWN_NAME_PREFIXES = tuple(n.lower() for n in SUPPORTED_MODEL_NAMES)
 
 
 def parse_password_if_pairing(adv: AdvertisementData) -> Optional[str]:
@@ -59,7 +66,7 @@ async def scan(timeout: float, match_mac: Optional[str]) -> Dict[str, Tuple[BLED
         pw = parse_password_if_pairing(adv)
         fw = parse_fw(adv)
 
-        if pw or fw or name.lower().startswith(("snooz", "breez")):
+        if pw or fw or name.lower().startswith(KNOWN_NAME_PREFIXES):
             found[addr] = (device, adv)
 
     scanner = BleakScanner(detection_callback=cb)

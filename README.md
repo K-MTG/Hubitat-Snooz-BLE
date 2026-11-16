@@ -117,6 +117,14 @@ cd Hubitat-Snooz-BLE/ble_ws_service
 ```
 4. Create `config.yaml` using `config_example.yaml` as reference. 
 5. Start container `sudo docker compose up -d --build`
+
+**Upgrading from a version before 0.1.4:** the Docker Compose project was renamed to `snooz-ble-ws-service`, so the existing container must be removed once before starting the new one:
+```bash
+git pull
+sudo docker compose build
+sudo docker rm -f snooz-ble-ws-service
+sudo docker compose up -d
+```
 ---
 
 ### Setup Hubitat Driver

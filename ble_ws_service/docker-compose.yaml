@@ -1,3 +1,8 @@
+# Explicit project name: the default is the directory name (ble_ws_service), which the
+# hubitat-august-ble service also uses, so on a shared host `down`/--remove-orphans
+# in one checkout could remove the other's container.
+name: snooz-ble-ws-service
+
 services:
   snooz-ble-ws-service:
     build: .

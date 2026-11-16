@@ -26,7 +26,7 @@ Two halves ship together and share a JSON protocol:
 ## Ground rules
 
 - **The repo is public.** Never commit or echo IPs, host names, WS tokens or pairing passwords. They live in gitignored files: `**/config.yaml` (token, pairing passwords), `.pi_hosts`, `.pi_password`. Leave the last two unopened unless the owner asks.
-- **Reading a deployed host is fine; writing needs the owner's go-ahead for that specific change.** Don't restart Docker or recreate containers as a side effect. Host OS config is managed in the owner's separate fleet (Ansible) repo. Deployment of this service is moving there too: a generic `ble_ws_service` role shared with August, with `config.yaml` templated from Ansible Vault. Until that role lands, deploys are by hand with docker compose in each checkout. After it lands, don't hand-edit `config.yaml` on hosts.
+- **Reading a deployed host is fine; writing needs the owner's go-ahead for that specific change.** Don't restart Docker or recreate containers as a side effect. Host OS config and this service's deployment both live in the owner's separate fleet (Ansible) repo. The generic `ble_ws_service` role (shared with August) deploys it. **Don't deploy with ad-hoc docker compose, and never hand-edit `config.yaml` on a fleet host.** It's templated from host_vars plus Vault, and the next run would overwrite your change.
 - **Say plainly when a change hasn't been tested on hardware.** Real BLE behavior can only be verified on a host with a Snooz in range.
 - **Hold new features until the owner asks.** Candidates are listed under Deferred ideas.
 
@@ -103,23 +103,35 @@ cd ble_ws_service && PYTHONPATH=. <venv>/bin/python -W error::DeprecationWarning
 uv pip compile requirements.txt --python-version 3.13 --python-platform aarch64-unknown-linux-gnu
 uv pip compile requirements.txt --python-version 3.13 --python-platform x86_64-unknown-linux-gnu
 
-# deploy — on the BLE host, owner-approved
-cd <checkout>/ble_ws_service && sudo docker compose up -d --build
-# one-time, when upgrading a host from < 0.1.4 (compose project renamed). Stop gracefully, never rm -f:
-#   sudo docker compose build && sudo docker stop -t 30 snooz-ble-ws-service \
-#     && sudo docker rm snooz-ble-ws-service && sudo docker compose up -d
+# release to the owner's fleet — in the fleet repo, owner-approved:
+#   1. merge here and note the merge commit
+#   2. set ble_snooz_version: <commit> in inventory/group_vars/all/versions.yml
+#   3. ansible-playbook playbooks/ble_ws_service.yml --tags snooz --check --diff   # dry run
+#   4. ansible-playbook playbooks/ble_ws_service.yml --tags snooz [--limit <host>]
+# rollback = set the previous commit and re-run (it rebuilds)
+
+# outside the fleet (README users): cd <checkout>/ble_ws_service && sudo docker compose up -d --build
 ```
 
 - Offline checks: use fake `BLEDevice` / `AdvertisementData` for advert parsing and binding, and a stub manager for `WebSocketServer` (connect with `websockets.asyncio.client` and test missing, wrong and correct tokens).
 - Dependency bumps: PyPI JSON (`https://pypi.org/pypi/<pkg>/json`) works from the dev machine; GitHub raw/API may time out, so diff the PyPI sdists instead.
-- Hardware check after a release: on/off/volume from Hubitat, then `systemctl restart bluetooth` to exercise rediscovery.
+- Fleet role details:
+  - Images carry the `org.opencontainers.image.revision` label; the role rebuilds when it doesn't match the pin.
+  - Low-memory hosts get an image built on a bigger Pi and copied in.
+  - `config.yaml` is owned by uid/gid 1000 (the container's `appuser`), mode 0600, and a change triggers a container restart.
+  - Config keys: `service.websocket.{host,port,auth_token}`, `service.devices[]{device_name,password,address?,name?}`. Quote passwords and MACs in vars: unquoted `0000…`/octal-looking passwords and all-digit MACs parse as ints.
+- Hardware check after a release:
+  - every device connected, with on/volume unchanged by the restart;
+  - for devices that are OFF, a silent set_volume +1 then back, expecting an event and a `device_state -> N client(s)` log line with N including Hubitat;
+  - audible on/off only with the owner's OK;
+  - optionally `docker kill` plus a restart to exercise the stale-link cleanup.
 - Branches: `fix/…`, `chore/…`, `feat/…`. PR into `main`. Release commits are titled `0.1.x - <summary>`, with `version.py` bumped in the same change.
 - Style: `from __future__ import annotations`, dataclasses, `_LOGGER` messages prefixed `[device_name]`, async throughout. Comments explain why, not what. Keep the README feature/limitation lists in sync.
 
 ## Gotchas
 
 - **Keep the explicit compose project `name: snooz-ble-ws-service`.** Both BLE repos used to default to the directory name `ble_ws_service`. On a host running both, `docker compose down` or `--remove-orphans` in one checkout could remove the other's container (found 2026-11-15 in a fleet review). Both now set explicit names (August: `hubitat-august-ble`), added in Snooz 0.1.4, and every host was migrated on 2026-11-15.
-- **Never SIGKILL the container (`docker rm -f`, `docker kill`); stop it gracefully.** On SIGTERM the service disconnects every Snooz. A kill skips that, so bluetoothd keeps the GATT link, the Snooz stops advertising, and the service can't find it again. That cost the 2026-11-15 canary about 4 minutes, until the link was dropped with Device1.Disconnect over D-Bus. Since 0.1.5 the service clears such links itself before scanning, and compose sets `stop_grace_period: 30s` so several devices can disconnect before Docker gives up.
+- **Never SIGKILL the container (`docker rm -f`, `docker kill`); stop it gracefully.** On SIGTERM the service disconnects every Snooz. A kill skips that, so bluetoothd keeps the GATT link, the Snooz stops advertising, and the service can't find it again. That cost the 2026-11-15 canary about 4 minutes, until the link was dropped with Device1.Disconnect over D-Bus. Since 0.1.5 the service clears such links itself before scanning, and compose sets `stop_grace_period: 30s` so several devices can disconnect before Docker gives up. Verified 2026-11-15 on 0.1.5: after `docker kill`, the restarted container dropped the stale link at +1.6 s and the device was connected again at +6.5 s.
 - **On hosts shared with the August service, this one listens on 8766.** August keeps 8765 and both use host networking. Set `service.websocket.port` in `config.yaml` and the Hubitat parent's port to match. The two containers also share one Bluetooth adapter and can't coordinate scans or connects, so intermittent connect failures there may be contention.
 - **Don't build the image on a low-memory host.** A 1 GB Pi with no swap hangs when it runs out of memory (ping works, SSH doesn't) until it's power-cycled. That happened during unattended-upgrades on 2026-11-06. Build elsewhere and `docker load`, or check free memory first.
 - **`bluetoothd` goes away and comes back; the service must survive it.**
@@ -128,7 +140,7 @@ cd <checkout>/ble_ws_service && sudo docker compose up -d --build
   - Recovery today: the `DEVICE_UNAVAILABLE` rediscovery above, plus bleak's D-Bus reset.
   - There is **no scanner watchdog** (the August service has one). While nothing sends commands, a device can sit disconnected and its Hubitat state goes stale.
 - **At boot the container can start before `bluetoothd` is ready.** Docker live-restore is off, so Docker upgrades restart the container too. By code reading (not observed), an exception from the initial scan propagates out of `SnoozManager.start()`, the process exits, and `restart: unless-stopped` retries. Don't swallow that error without adding a retry.
-- **A WS test client is not proof that events are missing; check Hubitat.** On 2026-11-15 a test client reported no `device_state` events after commands. Hubitat's Events tab showed every change arriving from the bridge parent, so the test listener was wrong. Since 0.1.5 each broadcast is also logged at INFO (`device_state -> N client(s)`).
+- **A WS test client is not proof that events are missing; check Hubitat.** On 2026-11-15 a test client reported no `device_state` events after commands. Hubitat's Events tab showed every change arriving from the bridge parent, so the test listener was wrong: it read the event's `state` at the top level, but the on/volume values are at `state.state`. Since 0.1.5 each broadcast is also logged at INFO (`device_state -> N client(s)`).
 - **Hosts run different BlueZ versions** (5.72–5.85, on Debian 13 and Ubuntu 24.04/26.04, Pi 4 and x86 VM). Don't assume one BlueZ behavior.
 
 ## Deferred ideas (discussed, intentionally not done yet)
